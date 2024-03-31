@@ -1,0 +1,111 @@
+x-airflow-common:
+  image: 'apache/airflow:2.8.3-python3.8'
+  volumes: &ref_0
+    - './dags:/opt/airflow/dags'
+    - './logs:/opt/airflow/logs'
+    - './configs/airflow.cfg:/opt/airflow/airflow.cfg'
+  user: '${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}'
+  depends_on: &ref_1
+    postgres:
+      condition: service_healthy
+services:
+  airflow-init:
+    image: 'apache/airflow:2.8.3-python3.8'
+    volumes: *ref_0
+    user: '${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}'
+    depends_on: *ref_1
+    entrypoint: '/bin/bash -c "/bin/bash -c \"$${@}\""'
+    command: |
+      /bin/bash -c "
+        airflow db init
+        airflow db upgrade
+        airflow users create -r Admin -u admin -e airflow@airflow.com -f admin -l user -p airflow
+      "
+  postgres:
+    image: 'postgres:13'
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DATABASE: airflow
+    volumes:
+      - 'postgres-db-volume:/var/lib/postgressql/data'
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - '-U'
+        - airflow
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+  airflow-scheduler:
+    image: 'apache/airflow:2.8.3-python3.8'
+    volumes: *ref_0
+    user: '${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}'
+    depends_on: *ref_1
+    command: scheduler
+    restart: always
+  airflow-webserver:
+    image: 'apache/airflow:2.8.3-python3.8'
+    volumes: *ref_0
+    user: '${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}'
+    depends_on: *ref_1
+    command: webserver
+    ports:
+      - '8081:8080'
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - '--fail'
+        - 'http://localhost:8080/health'
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+  statsd-exporter:
+    image: 'prom/statsd-exporter:v0.21.0'
+    volumes:
+      - './configs/statsd.yaml:/home/statsd-mapping-configs.yaml'
+    entrypoint:
+      - /bin/sh
+      - '-c'
+      - '--'
+    command:
+      - >-
+        statsd_exporter --log.level debug
+        --statsd.mapping-config=/home/statsd-mapping-configs.yaml
+    ports:
+      - '9102:9102'
+      - '9125:9125'
+    restart: always
+  prometheus:
+    image: 'prom/prometheus:v2.26.0'
+    volumes:
+      - './configs/prometheus.yaml:/etc/prometheus/prometheus.yaml'
+      - 'prometheus_data:/prometheus'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - '9092:9090'
+    restart: always
+  grafana:
+    image: 'grafana/grafana:6.7.2'
+    container_name: grafana
+    volumes:
+      - 'grafana_data:/var/lib/grafana'
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: always
+    ports:
+      - '3000:3000'
+volumes:
+  prometheus_data: null
+  grafana_data: null
+  postgres-db-volume: null
